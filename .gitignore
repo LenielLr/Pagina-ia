@@ -1,0 +1,23 @@
+# Node y dependencias
+node_modules/
+npm-debug.log
+
+# Archivos de entorno
+.env
+.env.local
+
+# Construcciones
+build/
+dist/
+output/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# VSCode y OneDrive
+.vscode/
+*.log
+*.tmp
+~$*
+OneDrive/

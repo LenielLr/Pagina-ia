@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: video-generator-backend
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - API_PROVIDER=${API_PROVIDER}
+      - RUNWAY_API_KEY=${RUNWAY_API_KEY}
+      - STABILITY_API_KEY=${STABILITY_API_KEY}
+      - DID_API_KEY=${DID_API_KEY}
+      - REPLICATE_API_KEY=${REPLICATE_API_KEY}
+    volumes:
+      - ./backend/output:/app/output
+      - ./backend/assets:/app/assets
+    networks:
+      - video-generator-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: video-generator-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    environment:
+      - REACT_APP_API_URL=http://localhost:3001
+    networks:
+      - video-generator-network
+    restart: unless-stopped
+
+networks:
+  video-generator-network:
+    driver: bridge
