@@ -1,237 +1,104 @@
-const express = require('express');
-const cors = require('cors');
-const axios = require('axios');
-const FormData = require('form-data');
-require('dotenv').config();
+// backend/server.js
 
+import express from "express";
+import cors from "cors";
+import bodyParser from "body-parser";
+import dotenv from "dotenv";
+import Replicate from "replicate";
+import { v4 as uuidv4 } from "uuid";
+
+// 🔹 Cargar variables de entorno (.env)
+dotenv.config();
+
+console.log("🔍 Probando variable de entorno...");
+console.log("REPLICATE_API_KEY:", process.env.REPLICATE_API_KEY ? "✅ Detectada" : "❌ No encontrada");
+
+
+// 🔹 Crear la aplicación Express
 const app = express();
-const PORT = process.env.PORT || 3001;
+const port = 3000;
 
-app.use(cors());
-app.use(express.json());
-app.use(express.static('public'));
+// 🔹 Middlewares
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"]
+}));
+app.use(bodyParser.json());
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+// 🔹 Inicializar cliente de Replicate
+if (!process.env.REPLICATE_API_KEY) {
+  console.error("❌ ERROR: No se encontró REPLICATE_API_KEY en el archivo .env");
+  process.exit(1);
+}
+
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_KEY,
 });
 
-// Runway ML API
-async function generateVideoRunway(config) {
-  const apiKey = process.env.RUNWAY_API_KEY;
-  
-  try {
-    const response = await axios.post(
-      'https://api.runwayml.com/v1/generate',
-      {
-        prompt: config.prompt,
-        duration: config.duration,
-        width: config.width,
-        height: config.height,
-        fps: config.fps,
-        model: 'gen2'
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    return response.data;
-  } catch (error) {
-    console.error('Error con Runway:', error.response?.data || error.message);
-    throw error;
+// Mapa temporal de trabajos
+const jobs = new Map();
+
+// 🔹 Ruta base (para comprobar conexión)
+app.get("/", (req, res) => {
+  res.send("✅ Servidor backend funcionando y conectado a Replicate API");
+});
+
+// 🔹 Crear trabajo para generar video
+app.post("/api/job", async (req, res) => {
+  const { prompt } = req.body;
+
+  if (!prompt) {
+    return res.status(400).json({ success: false, error: "Falta el prompt." });
   }
-}
 
-// Stability AI API
-async function generateVideoStability(config) {
-  const apiKey = process.env.STABILITY_API_KEY;
-  
+  const jobId = uuidv4();
+  jobs.set(jobId, { status: "processing" });
+
   try {
-    const imageResponse = await axios.post(
-      'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image',
-      {
-        text_prompts: [{ text: config.prompt }],
-        width: config.width,
-        height: config.height,
-        samples: 1
+    console.log(`🎬 Generando video con prompt: "${prompt}"...`);
+
+    const output = await replicate.run("pika-labs/pika:latest", {
+      input: {
+        prompt,
+        aspect_ratio: "16:9",
+        motion: "smooth",
+        fps: 24,
       },
-      {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
+    });
 
-    const videoResponse = await axios.post(
-      'https://api.stability.ai/v1/generation/image-to-video',
-      {
-        image: imageResponse.data.artifacts[0].base64,
-        cfg_scale: 1.8,
-        motion_bucket_id: 127,
-        seed: 0
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`
-        }
-      }
-    );
-    return videoResponse.data;
-  } catch (error) {
-    console.error('Error con Stability AI:', error.response?.data || error.message);
-    throw error;
-  }
-}
+    const videoUrl = Array.isArray(output) ? output[0] : output;
 
-// D-ID API
-async function generateVideoDID(config) {
-  const apiKey = process.env.DID_API_KEY;
-  
-  try {
-    const response = await axios.post(
-      'https://api.d-id.com/talks',
-      {
-        script: {
-          type: 'text',
-          input: config.text,
-          provider: {
-            type: 'microsoft',
-            voice_id: 'es-ES-ElviraNeural'
-          }
-        },
-        config: {
-          fluent: true,
-          pad_audio: 0.0,
-          stitch: true,
-          result_format: 'mp4'
-        },
-        source_url: 'https://create-images-results.d-id.com/default-presenter.jpg'
-      },
-      {
-        headers: {
-          'Authorization': `Basic ${apiKey}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
+    jobs.set(jobId, { status: "completed", video: videoUrl });
 
-    const talkId = response.data.id;
-    let videoUrl = null;
-    
-    while (!videoUrl) {
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      const statusResponse = await axios.get(
-        `https://api.d-id.com/talks/${talkId}`,
-        {
-          headers: {
-            'Authorization': `Basic ${apiKey}`
-          }
-        }
-      );
-
-      if (statusResponse.data.status === 'done') {
-        videoUrl = statusResponse.data.result_url;
-      }
-    }
-    return { videoUrl };
-  } catch (error) {
-    console.error('Error con D-ID:', error.response?.data || error.message);
-    throw error;
-  }
-}
-
-// Replicate API
-async function generateVideoReplicate(config) {
-  const apiKey = process.env.REPLICATE_API_KEY;
-  
-  try {
-    const response = await axios.post(
-      'https://api.replicate.com/v1/predictions',
-      {
-        version: 'stability-ai/stable-video-diffusion:3f0457e4619daac51203dedb472816fd4af51f3149fa7a9e0b5ffcf1b8172438',
-        input: {
-          prompt: config.prompt,
-          frames: config.fps * config.duration,
-          width: config.width,
-          height: config.height
-        }
-      },
-      {
-        headers: {
-          'Authorization': `Token ${apiKey}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    let prediction = response.data;
-    while (prediction.status !== 'succeeded' && prediction.status !== 'failed') {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      const statusResponse = await axios.get(
-        `https://api.replicate.com/v1/predictions/${prediction.id}`,
-        {
-          headers: {
-            'Authorization': `Token ${apiKey}`
-          }
-        }
-      );
-      prediction = statusResponse.data;
-    }
-    return prediction;
-  } catch (error) {
-    console.error('Error con Replicate:', error.response?.data || error.message);
-    throw error;
-  }
-}
-
-// Endpoint principal
-app.post('/api/generate-video', async (req, res) => {
-  try {
-    const config = req.body;
-    console.log('Generando video con configuración:', config);
-
-    let result;
-    const apiProvider = process.env.API_PROVIDER || 'runway';
-    
-    switch (apiProvider) {
-      case 'runway':
-        result = await generateVideoRunway(config);
-        break;
-      case 'stability':
-        result = await generateVideoStability(config);
-        break;
-      case 'did':
-        result = await generateVideoDID(config);
-        break;
-      case 'replicate':
-        result = await generateVideoReplicate(config);
-        break;
-      default:
-        throw new Error('API provider no configurado');
-    }
+    console.log("✅ Video generado:", videoUrl);
 
     res.json({
       success: true,
-      videoUrl: result.videoUrl || result.output,
-      data: result
+      jobId,
+      video: videoUrl,
     });
-
   } catch (error) {
-    console.error('Error generando video:', error);
+    console.error("❌ Error generando video:", error);
+    jobs.set(jobId, { status: "error", error: error.message });
     res.status(500).json({
       success: false,
-      error: error.message
+      error: "Error generando el video con Replicate.",
+      details: error.message,
     });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
-  console.log(`📹 API Provider: ${process.env.API_PROVIDER || 'runway'}`);
+// 🔹 Consultar estado de un trabajo
+app.get("/api/job/:id", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) {
+    return res.status(404).json({ success: false, error: "Trabajo no encontrado." });
+  }
+  res.json(job);
+});
+
+// 🔹 Iniciar el servidor
+app.listen(port, () => {
+  console.log(`🚀 Servidor backend corriendo en http://localhost:${port}`);
 });
